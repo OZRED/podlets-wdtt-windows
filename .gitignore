@@ -1,0 +1,22 @@
+# Build outputs and binaries
+build/bin/
+*.exe
+*.exe~
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Frontend build cache
+frontend/dist/
+
+# Local configs and runtime cache
+resources/
+vk_profile.json
+captcha_browser_fp
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
