@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"podlets-wdtt/tray"
+	"podlets-wdtt/vpn"
 )
 
 //go:embed all:frontend/dist
@@ -61,6 +62,7 @@ func main() {
 				func() {
 					_ = app.Disconnect()
 					tray.RemoveTray()
+					vpn.CleanupWintunAdapter()
 					runtime.Quit(ctx)
 				},
 			)
@@ -72,11 +74,13 @@ func main() {
 				return true // окно скрывается, трей остаётся
 			}
 			tray.RemoveTray()
+			vpn.CleanupWintunAdapter()
 			return false // нормальный выход
 		},
 		OnShutdown: func(ctx context.Context) {
 			tray.RemoveTray()
 			_ = app.Disconnect()
+			vpn.CleanupWintunAdapter()
 		},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "podlets-wdtt-single-instance-lock",

@@ -44,7 +44,7 @@ func NewWintunDevice() (*WintunDevice, error) {
 		return nil, fmt.Errorf("wintun driver not available: %w", err)
 	}
 
-	// Если адаптер уже существовал от предыдущего аварийного запуска — закрываем или открываем
+	// Если адаптер уже существовал в системе — открываем его
 	adapter, err := wintun.OpenAdapter(AdapterName)
 	if err != nil {
 		adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
@@ -56,14 +56,22 @@ func NewWintunDevice() (*WintunDevice, error) {
 	// Ёмкость кольцевого буфера 8 МБ
 	session, err := adapter.StartSession(0x800000)
 	if err != nil {
-		adapter.Close()
-		return nil, fmt.Errorf("failed to start wintun session: %w", err)
+		// Если предыдущая сессия осталась заблокированной — пересоздаем адаптер начисто
+		_ = adapter.Close()
+		adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to recreate wintun adapter: %w", err)
+		}
+		session, err = adapter.StartSession(0x800000)
+		if err != nil {
+			_ = adapter.Close()
+			return nil, fmt.Errorf("failed to start wintun session: %w", err)
+		}
 	}
 
 	closeEvent, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		session.End()
-		adapter.Close()
 		return nil, fmt.Errorf("failed to create close event: %w", err)
 	}
 
@@ -152,7 +160,9 @@ func (d *WintunDevice) Configure(tunIP, dnsCSV, mtuStr string) error {
 		log.Println("[WINTUN] Маршрут 128.0.0.0/1 (metric 0) добавлен")
 	}
 
-	_, _ = runHiddenCmd("ipconfig", "/flushdns")
+	go func() {
+		_, _ = runHiddenCmd("ipconfig", "/flushdns")
+	}()
 	return nil
 }
 
@@ -204,7 +214,8 @@ func (d *WintunDevice) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// Close закрывает сессию и адаптер
+// Close закрывает сессию туннеля и сбрасывает IP/DNS/маршруты Wintun,
+// оставляя адаптер зарегистрированным в системе для мгновенного повторного подключения.
 func (d *WintunDevice) Close() error {
 	d.closeOnce.Do(func() {
 		d.mu.Lock()
@@ -215,14 +226,28 @@ func (d *WintunDevice) Close() error {
 			_ = windows.SetEvent(d.closeEvent)
 		}
 
+		if d.Adapter != nil {
+			luid := winipcfg.LUID(d.Adapter.LUID())
+			_ = luid.FlushRoutes(windows.AF_INET)
+			_ = luid.FlushDNS(windows.AF_INET)
+			_ = luid.FlushIPAddresses(windows.AF_INET)
+		}
+
 		d.Session.End()
-		d.Adapter.Close()
 
 		if d.closeEvent != 0 {
 			_ = windows.CloseHandle(d.closeEvent)
 			d.closeEvent = 0
 		}
-		log.Printf("[WINTUN] Адаптер %s закрыт", AdapterName)
+		log.Printf("[WINTUN] Сессия адаптера %s остановлена (адаптер сохранён для мгновенного реконнекта)", AdapterName)
 	})
 	return nil
+}
+
+// CleanupWintunAdapter полностью удаляет адаптер из системы Windows (вызывается при выходе из программы)
+func CleanupWintunAdapter() {
+	if adapter, err := wintun.OpenAdapter(AdapterName); err == nil {
+		_ = adapter.Close()
+		log.Printf("[WINTUN] Адаптер %s полностью удалён из системы", AdapterName)
+	}
 }

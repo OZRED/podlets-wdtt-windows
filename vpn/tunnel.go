@@ -160,12 +160,14 @@ func (tc *TunnelController) run(ctx context.Context, p *config.ConnectionProfile
 
 		// Автоматически добавляем все полученные TURN серверы в обход через физический шлюз
 		core.SetTurnURLCallback(func(urls []string) {
-			for _, u := range urls {
-				host, _, err := net.SplitHostPort(u)
-				if err == nil {
-					_ = rm.AddBypassHost(host)
+			go func() {
+				for _, u := range urls {
+					host, _, err := net.SplitHostPort(u)
+					if err == nil {
+						_ = rm.AddBypassHost(host)
+					}
 				}
-			}
+			}()
 		})
 	}
 
@@ -207,13 +209,31 @@ func (tc *TunnelController) run(ctx context.Context, p *config.ConnectionProfile
 	disp := core.NewDispatcherPendingTUN(ctx, tc.stats)
 	defer disp.Shutdown()
 
+	// Предварительная асинхронная инициализация Wintun адаптера (в параллель с запросами к VK/TURN)
+	type wintunInitRes struct {
+		dev *WintunDevice
+		err error
+	}
+	wintunCh := make(chan wintunInitRes, 1)
+	go func() {
+		dev, devErr := NewWintunDevice()
+		wintunCh <- wintunInitRes{dev: dev, err: devErr}
+	}()
+
 	configCh := make(chan string, 1)
 
-	// Ожидание конфига от сервера и инициализация Wintun
+	// Ожидание конфига от сервера и применение настроек Wintun
 	go func() {
 		select {
 		case rawConf, ok := <-configCh:
 			if !ok || rawConf == "" {
+				// Конфиг не получен: если Wintun успел создаться в фоне — закрываем сессию
+				go func() {
+					res := <-wintunCh
+					if res.dev != nil {
+						_ = res.dev.Close()
+					}
+				}()
 				return
 			}
 			log.Printf("[TUNNEL] Получен конфиг от сервера: %s", rawConf)
@@ -223,13 +243,14 @@ func (tc *TunnelController) run(ctx context.Context, p *config.ConnectionProfile
 				if len(parts) >= 3 {
 					tunIP, dnsCSV, mtuStr := parts[0], parts[1], parts[2]
 
-					// Поднимаем Wintun адаптер
-					dev, devErr := NewWintunDevice()
-					if devErr != nil {
-						log.Printf("[TUNNEL] Ошибка создания Wintun: %v", devErr)
-						tc.setState(StateError, fmt.Sprintf("Wintun error: %v", devErr))
+					// Забираем уже созданный в параллельном потоке Wintun адаптер
+					wintunRes := <-wintunCh
+					if wintunRes.err != nil {
+						log.Printf("[TUNNEL] Ошибка создания Wintun: %v", wintunRes.err)
+						tc.setState(StateError, fmt.Sprintf("Wintun error: %v", wintunRes.err))
 						return
 					}
+					dev := wintunRes.dev
 
 					// Настраиваем IP, MTU, DNS и глобальную маршрутизацию через WinIPCfg
 					if confErr := dev.Configure(tunIP, dnsCSV, mtuStr); confErr != nil {
@@ -251,6 +272,13 @@ func (tc *TunnelController) run(ctx context.Context, p *config.ConnectionProfile
 				}
 			}
 		case <-ctx.Done():
+			// Отмена контекста: закрываем фоновый Wintun если успел создаться
+			go func() {
+				res := <-wintunCh
+				if res.dev != nil {
+					_ = res.dev.Close()
+				}
+			}()
 			return
 		}
 	}()
