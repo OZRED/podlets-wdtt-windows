@@ -54,7 +54,7 @@ export const AddProfileChoiceModal: React.FC<AddProfileChoiceModalProps> = ({
                   Ключ или ссылка конфигурации
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5">
-                  Импорт ссылки <code className="text-slate-300 font-mono text-[11px]">podlets://</code>, <code className="text-slate-300 font-mono text-[11px]">wdtt://</code> или Base64
+                  Импорт ссылки <code className="text-slate-300 font-mono text-[11px]">wdtt://</code>, <code className="text-slate-300 font-mono text-[11px]">qwdtt://</code> или Base64
                 </div>
               </div>
             </div>

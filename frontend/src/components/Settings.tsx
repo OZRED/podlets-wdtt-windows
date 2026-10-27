@@ -172,7 +172,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-bold text-white">Podlets WDTT</div>
-              <div className="text-xs text-slate-400 mt-0.5">Версия 0.1 • Windows Wintun Edition • Форк qWDTT</div>
+              <div className="text-xs text-slate-400 mt-0.5">Версия 0.1.5 • Windows Wintun Edition • Форк qWDTT</div>
               <div className="text-[11px] text-slate-500 mt-2">
                 Лицензия GNU GPL v3 • Настройки и драйвер в папке <code className="text-slate-300">resources/</code>
               </div>

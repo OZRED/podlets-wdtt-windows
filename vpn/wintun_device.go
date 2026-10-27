@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -38,33 +39,59 @@ var adapterGUID = windows.GUID{
 	Data4: [8]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0},
 }
 
+func removeStaleWintunAdapter() {
+	if adapter, err := wintun.OpenAdapter(AdapterName); err == nil {
+		_ = adapter.Close()
+		log.Printf("[WINTUN] Найден и удалён залипший адаптер %s", AdapterName)
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
 // NewWintunDevice инициализирует и поднимает Wintun адаптер
 func NewWintunDevice() (*WintunDevice, error) {
 	if err := EnsureWintunLoaded(); err != nil {
 		return nil, fmt.Errorf("wintun driver not available: %w", err)
 	}
 
-	// Если адаптер уже существовал в системе — открываем его
-	adapter, err := wintun.OpenAdapter(AdapterName)
+	removeStaleWintunAdapter()
+
+	var adapter *wintun.Adapter
+	var err error
+
+	adapter, err = wintun.OpenAdapter(AdapterName)
 	if err != nil {
 		adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create wintun adapter: %w", err)
+			removeStaleWintunAdapter()
+			time.Sleep(300 * time.Millisecond)
+			adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create wintun adapter: %w", err)
+			}
 		}
 	}
 
-	// Ёмкость кольцевого буфера 8 МБ
 	session, err := adapter.StartSession(0x800000)
 	if err != nil {
-		// Если предыдущая сессия осталась заблокированной — пересоздаем адаптер начисто
+		log.Printf("[WINTUN] Не удалось запустить сессию Wintun (%v), пересоздаём адаптер...", err)
 		_ = adapter.Close()
+		removeStaleWintunAdapter()
+		time.Sleep(300 * time.Millisecond)
+
 		adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to recreate wintun adapter: %w", err)
+			removeStaleWintunAdapter()
+			time.Sleep(300 * time.Millisecond)
+			adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, &adapterGUID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to recreate wintun adapter: %w", err)
+			}
 		}
+
 		session, err = adapter.StartSession(0x800000)
 		if err != nil {
 			_ = adapter.Close()
+			removeStaleWintunAdapter()
 			return nil, fmt.Errorf("failed to start wintun session: %w", err)
 		}
 	}
@@ -72,6 +99,8 @@ func NewWintunDevice() (*WintunDevice, error) {
 	closeEvent, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		session.End()
+		_ = adapter.Close()
+		removeStaleWintunAdapter()
 		return nil, fmt.Errorf("failed to create close event: %w", err)
 	}
 
@@ -94,7 +123,6 @@ func (d *WintunDevice) Configure(tunIP, dnsCSV, mtuStr string) error {
 
 	luid := winipcfg.LUID(d.Adapter.LUID())
 
-	// 1. Назначение IP-адреса и подсети /16
 	cleanTunIP := strings.TrimSpace(tunIP)
 	ip, err := netip.ParseAddr(cleanTunIP)
 	if err != nil {
@@ -107,7 +135,6 @@ func (d *WintunDevice) Configure(tunIP, dnsCSV, mtuStr string) error {
 	}
 	log.Printf("[WINTUN] IP-адрес %s успешно назначен на адаптер", prefix)
 
-	// 2. MTU и метрика интерфейса
 	mtu := 1300
 	if parsedMTU, err := strconv.Atoi(strings.TrimSpace(mtuStr)); err == nil && parsedMTU > 0 {
 		mtu = parsedMTU
@@ -126,7 +153,6 @@ func (d *WintunDevice) Configure(tunIP, dnsCSV, mtuStr string) error {
 		log.Printf("[WINTUN] Предупреждение: IPInterface недоступен: %v", err)
 	}
 
-	// 3. DNS-серверы
 	if dnsCSV != "" {
 		var dnsAddrs []netip.Addr
 		for _, part := range strings.Split(dnsCSV, ",") {
@@ -144,10 +170,8 @@ func (d *WintunDevice) Configure(tunIP, dnsCSV, mtuStr string) error {
 		}
 	}
 
-	// 4. Очистка старых маршрутов и установка глобальных маршрутов по умолчанию
 	_ = luid.FlushRoutes(windows.AF_INET)
 
-	// 0.0.0.0/1 и 128.0.0.0/1 направляют весь интернет-трафик в Wintun (on-link)
 	if err := luid.AddRoute(netip.MustParsePrefix("0.0.0.0/1"), netip.IPv4Unspecified(), 0); err != nil {
 		log.Printf("[WINTUN] Предупреждение: AddRoute 0.0.0.0/1: %v", err)
 	} else {

@@ -144,6 +144,9 @@ func (a *App) startup(ctx context.Context) {
 	// Гарантируем наличие драйвера в resources/wintun.dll
 	_ = vpn.EnsureWintunLoaded()
 
+	// Заранее кэшируем основной шлюз, чтобы ускорить подключение
+	vpn.InitDefaultRoute()
+
 	// Колбэк капчи VK — отправляем событие на фронтенд для показа WebView
 	core.OnCaptchaRequired = func(mode, redirectURI, sessionToken string) {
 		log.Printf("[APP] Требуется решение капчи VK (%s)", mode)
@@ -310,7 +313,7 @@ func (a *App) FetchSubscription(subURL string) (*RemoteSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Podlets-WDTT-Windows/0.1")
+	req.Header.Set("User-Agent", "Podlets-WDTT-Windows/0.1.5")
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
@@ -545,14 +548,12 @@ func (a *App) ImportUri(uriStr string) (*config.ConnectionProfile, error) {
 	}
 
 	// Нормализуем URI схемы
-	trimmed = strings.Replace(trimmed, "podlets:config", "wdtt://config", 1)
-	trimmed = strings.Replace(trimmed, "podlets://config", "wdtt://config", 1)
 	trimmed = strings.Replace(trimmed, "qwdtt:config", "wdtt://config", 1)
 	trimmed = strings.Replace(trimmed, "wdtt:config", "wdtt://config", 1)
 	trimmed = strings.Replace(trimmed, "qwdtt://config", "wdtt://config", 1)
 
 	if !strings.HasPrefix(trimmed, "wdtt://") {
-		return nil, fmt.Errorf("неизвестный формат: ссылка должна начинаться с podlets://, wdtt:// или qwdtt://")
+		return nil, fmt.Errorf("неизвестный формат: ссылка должна начинаться с wdtt:// или qwdtt://")
 	}
 
 	u, err := url.Parse(trimmed)

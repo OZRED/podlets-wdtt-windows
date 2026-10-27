@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // RouteManager управляет маршрутами Windows
@@ -19,13 +20,59 @@ type RouteManager struct {
 	mu              sync.Mutex
 }
 
+var (
+	defaultRouteMu sync.RWMutex
+	cachedGateway  string
+	cachedIface    string
+	cachedRouteAt  time.Time
+)
+
+// InitDefaultRoute кэширует основной шлюз заранее (вызывается при старте приложения)
+func InitDefaultRoute() {
+	go func() {
+		gw, iface, err := findDefaultGateway()
+		if err != nil {
+			log.Printf("[ROUTE] Не удалось определить шлюз при старте: %v", err)
+			return
+		}
+		defaultRouteMu.Lock()
+		cachedGateway = gw
+		cachedIface = iface
+		cachedRouteAt = time.Now()
+		defaultRouteMu.Unlock()
+		log.Printf("[ROUTE] Шлюз закэширован при старте: %s (интерфейс: %s)", gw, iface)
+	}()
+}
+
 // NewRouteManager находит текущий основной шлюз по умолчанию
 func NewRouteManager() (*RouteManager, error) {
-	gw, iface, err := findDefaultGateway()
+	defaultRouteMu.RLock()
+	gw, iface, at := cachedGateway, cachedIface, cachedRouteAt
+	defaultRouteMu.RUnlock()
+
+	// Используем кэш, если он не старше 10 минут
+	if gw != "" && !at.IsZero() && time.Since(at) < 10*time.Minute {
+		log.Printf("[ROUTE] Используем кэшированный шлюз: %s (интерфейс: %s)", gw, iface)
+		return &RouteManager{
+			OriginalGateway: gw,
+			OriginalIface:   iface,
+			AddedRoutes:     make([]string, 0),
+		}, nil
+	}
+
+	var err error
+	gw, iface, err = findDefaultGateway()
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect default gateway: %w", err)
 	}
 	log.Printf("[ROUTE] Основной шлюз: %s (интерфейс: %s)", gw, iface)
+
+	defaultRouteMu.Lock()
+	cachedGateway = gw
+	cachedIface = iface
+	cachedRouteAt = time.Now()
+	defaultRouteMu.Unlock()
+
 	return &RouteManager{
 		OriginalGateway: gw,
 		OriginalIface:   iface,

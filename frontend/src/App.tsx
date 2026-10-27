@@ -210,7 +210,7 @@ export function App() {
   };
 
   const handleImportUri = async () => {
-    const raw = prompt('Вставьте ссылку конфигурации (podlets://config?... или wdtt://config?... или Base64):');
+    const raw = prompt('Вставьте ссылку конфигурации (wdtt://config?... или qwdtt://config?... или Base64):');
     if (!raw) return;
 
     try {
@@ -400,7 +400,7 @@ export function App() {
               <div className="text-sm font-extrabold text-white tracking-wide">
                 Podlets WDTT
               </div>
-              <div className="text-[10px] text-indigo-400 font-mono font-medium">v0.1 • Windows</div>
+              <div className="text-[10px] text-indigo-400 font-mono font-medium">v0.1.5 • Windows</div>
             </div>
           </div>
 
